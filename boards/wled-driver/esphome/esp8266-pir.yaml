@@ -1,0 +1,170 @@
+# make flash-device-name-ip device_name=motionsensor01 device_id=motionsensor01 ip=192.168.1.248 DEVICE=/dev/ttyCH343USB0 project=esp8266-pir
+substitutions:
+  device_name: some-name
+  device_id: some_id
+
+esphome:
+    name: $device_name
+    platform: ESP8266
+    board: esp12e
+
+wifi:
+    ssid: !secret wifi_name_jr
+    password: !secret wifi_password_jr
+    fast_connect: true
+
+logger:
+    level: DEBUG
+
+ota:
+
+mqtt:
+    broker: 192.168.1.157
+    discovery: True
+    # log_topic: /$device_id/debug
+
+select:
+# https://esphome.io/components/select/#base-select-configuration
+- platform: template
+  name: Light mode
+  id: light_mode
+  optimistic: true
+  options:
+  - "Motion"
+  - "ON"
+  - "OFF"
+  on_value:
+    then:
+    # - logger.log:
+    #     format: "Chosen option: %s (index %d)"
+    #     args: ["x.c_str()", "i"]
+    - lambda: |
+        auto index = id(light_mode).active_index();
+
+        if (index.has_value()) {
+          int state = index.value();
+          ESP_LOGI("main", "Option of my select: %i", state);
+
+          if(state == 2) {
+            ESP_LOGI("main", "0 and ...: %i", id(motion_gpio4).state);
+            auto call = id(light01).turn_off();
+            call.set_transition_length(500); // in ms
+            call.perform();
+          }
+
+          if(state == 1 || id(motion_gpio4).state == 1) {
+            ESP_LOGI("main", "0 and ...: %i", id(motion_gpio4).state);
+            auto call = id(light01).turn_on();
+            call.set_transition_length(500); // in ms
+            call.set_brightness(1.0); // 1.0 is full brightness
+            call.perform();
+            return ;
+          }
+        }
+number:
+# https://esphome.io/components/number/
+- platform: template
+  name: PIR Delay
+  id: pir_delay_sec
+  unit_of_measurement: s
+  restore_value: true
+  min_value: 5
+  max_value: 30
+  step: 1
+  optimistic: true
+
+sensor:
+- platform: wifi_signal
+  name: $device_name ESP Signal
+  update_interval: 120s
+  disabled_by_default: false
+  force_update: false
+  unit_of_measurement: dBm
+  accuracy_decimals: 0
+  device_class: signal_strength
+  state_class: measurement
+  entity_category: diagnostic
+- platform: uptime
+  name: $device_name ESP Uptime
+  update_interval: 120s
+  disabled_by_default: false
+  force_update: false
+  unit_of_measurement: s
+  icon: mdi:timer-outline
+  accuracy_decimals: 0
+  state_class: total_increasing
+  entity_category: diagnostic
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO4
+      mode:
+        input: true
+        pullup: true
+    name: "$device_name Motion GPIO4"
+    device_class: motion
+    id: motion_gpio4
+    filters:
+      - delayed_off: !lambda return 1000 * id(pir_delay_sec).state;
+    on_press:
+      - if:
+          condition:
+            lambda: |
+              auto index = id(light_mode).active_index();
+              if (index.has_value()) {
+                int state = index.value();
+                if(state == 0) {
+                  return true;
+                }
+              }
+              return false;
+          then:
+          - light.turn_on:
+              id: light01
+              brightness: 100%
+              transition_length: 0.500s
+    on_release:
+      - if:
+          condition:
+            lambda: |
+              auto index = id(light_mode).active_index();
+              if (index.has_value()) {
+                int state = index.value();
+                if(state == 0) {
+                  return true;
+                }
+              }
+              return false;
+          then:
+          - light.turn_off:
+              id: light01
+              transition_length: 3000ms
+
+  - platform: gpio
+    pin: GPIO2
+    name: "$device_name Door GPIO2"
+    device_class: door
+
+text_sensor:
+- platform: wifi_info
+  ip_address:
+    name: $device_name IP
+    disabled_by_default: false
+    entity_category: diagnostic
+  ssid:
+    name: $device_name SSID
+    disabled_by_default: false
+    entity_category: diagnostic
+
+output:
+  - platform: esp8266_pwm
+    id: output_component1
+    pin: GPIO5
+
+light:
+# https://esphome.io/components/light/index.html
+- platform: monochromatic
+  id: light01
+  name: "$device_name Light"
+  output: output_component1
